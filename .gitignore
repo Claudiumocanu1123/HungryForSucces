@@ -34,3 +34,10 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# local database (auto-generated on first run)
+/data/
+
+# env
+.env
+.env.local
