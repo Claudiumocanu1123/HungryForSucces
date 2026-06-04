@@ -27,7 +27,7 @@ export function useDayTime(sim: SimLike): DayTimeResult {
       setTimeOfDay(stageProgressToHour(sim.stageIndex, progress))
     }
     tick()
-    const id = setInterval(tick, 200)
+    const id = setInterval(tick, 1000)   // 1s is plenty — stage lasts 20s
     return () => clearInterval(id)
   }, [sim.stageIndex, sim.startedAt])
 

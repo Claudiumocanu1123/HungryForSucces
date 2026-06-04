@@ -1,34 +1,92 @@
 import { NPCWithState, DayStage } from '@/types'
 
-function hashNPC(id: string): [number, number, number] {
+// ── Hash helper ────────────────────────────────────────────────────────────────
+function hashNPC(id: string): [number, number, number, number] {
   let h = 5381
   for (let i = 0; i < id.length; i++) h = (((h << 5) + h) ^ id.charCodeAt(i)) >>> 0
-  return [(h & 0x3ff) / 0x400, ((h >>> 10) & 0x3ff) / 0x400, ((h >>> 20) & 0x3ff) / 0x400]
+  return [
+    (h & 0xff) / 0xff,
+    ((h >>> 8) & 0xff) / 0xff,
+    ((h >>> 16) & 0xff) / 0xff,
+    ((h >>> 24) & 0xff) / 0xff,
+  ]
 }
+
+// ── Real Iași districts for HOME positions ─────────────────────────────────────
+// All within IMG_BOUNDS: lat [47.120–47.200], lng [27.553–27.650]
+const HOMES: [number, number][] = [
+  [47.171, 27.560],  // 0 — Copou (deal universitar, nord-vest)
+  [47.163, 27.641],  // 1 — Alexandru cel Bun (est)
+  [47.148, 27.612],  // 2 — Tătărași (cartier muncitoresc)
+  [47.139, 27.596],  // 3 — Nicolina (sud)
+  [47.154, 27.585],  // 4 — Podu Roș / centru
+  [47.132, 27.576],  // 5 — Mărțișor (sud-vest)
+  [47.134, 27.594],  // 6 — CUG (sud-est)
+  [47.174, 27.607],  // 7 — Păcurari (nord)
+  [47.144, 27.566],  // 8 — Galata (vest)
+  [47.165, 27.572],  // 9 — Fundație (Copou jos)
+]
+
+// ── Real Iași work locations ───────────────────────────────────────────────────
+const WORKS: [number, number][] = [
+  [47.161, 27.584],  // 0 — Centru / birouri Palat
+  [47.147, 27.626],  // 1 — Industrial est (Fortus)
+  [47.168, 27.557],  // 2 — Universitate / Copou
+  [47.164, 27.574],  // 3 — Spital / medical
+  [47.157, 27.594],  // 4 — Podu Roș comercial
+  [47.152, 27.591],  // 5 — Palas / mall offices
+  [47.142, 27.580],  // 6 — Zona industrială Nicolina
+]
+
+// ── Lunch / restaurant spots ───────────────────────────────────────────────────
+const LUNCHES: [number, number][] = [
+  [47.153, 27.590],  // Palas food court
+  [47.166, 27.564],  // Copou parc cafe
+  [47.158, 27.587],  // Restaurant Centru
+  [47.149, 27.605],  // Tătărași fast-food
+  [47.161, 27.595],  // Bulevardul Independenței
+]
+
+// ── Evening/leisure spots ──────────────────────────────────────────────────────
+const EVENINGS: [number, number][] = [
+  [47.167, 27.562],  // Parcul Copou (tei)
+  [47.157, 27.589],  // Centru vechi / Unirii
+  [47.153, 27.592],  // Palas — seara
+  [47.147, 27.607],  // Mall zona est
+]
 
 /**
  * Stage-based coordinates for city map view.
- * Uses small offsets (±0.025°  ≈ ±2km) so NPCs spread across the city
- * without leaving the visible map area.
+ * Each NPC is assigned to real Iași districts based on a deterministic hash,
+ * ensuring NPCs are spread across the entire panoramic image rather than
+ * clustering near the city center.
  */
 export function getCityStageCoords(npc: NPCWithState, stage: DayStage): [number, number] {
-  const [r1, r2, r3] = hashNPC(npc.id)
+  const [r1, r2, r3, r4] = hashNPC(npc.id)
 
-  // Deterministic "home" position — unique per NPC
-  const homeLat = npc.lat + (r1 - 0.5) * 0.028
-  const homeLng = npc.lng + (r2 - 0.5) * 0.024
+  // ── Home: pick one of 10 real districts, add micro-jitter within ~150m ──
+  const homeIdx  = Math.floor(r1 * HOMES.length)
+  const [bLat, bLng] = HOMES[homeIdx]
+  const homeLat  = bLat + (r2 - 0.5) * 0.003   // ±~165m
+  const homeLng  = bLng + (r3 - 0.5) * 0.003
 
-  // Deterministic "work" position — shifted by different hash components
-  const workLat = npc.lat + (r2 - 0.5) * 0.032 + 0.006
-  const workLng = npc.lng + (r3 - 0.5) * 0.026 + 0.008
+  // ── Work: different district from home ────────────────────────────────────
+  const workIdx  = Math.floor(r3 * WORKS.length)
+  const [wLat, wLng] = WORKS[workIdx]
+  const workLat  = wLat + (r4 - 0.5) * 0.002
+  const workLng  = wLng + (r1 - 0.5) * 0.002
 
-  // Restaurant / cafe — another offset
-  const restLat = npc.lat + (r3 - 0.5) * 0.018
-  const restLng = npc.lng + (r1 - 0.5) * 0.016
+  // ── Lunch spot ────────────────────────────────────────────────────────────
+  const lunchIdx = Math.floor(r2 * LUNCHES.length)
+  const [lLat, lLng] = LUNCHES[lunchIdx]
+  const restLat  = lLat + (r1 - 0.5) * 0.0015
+  const restLng  = lLng + (r4 - 0.5) * 0.0015
 
-  // Evening leisure — slightly different from home
-  const evenLat = homeLat + (r2 - 0.5) * 0.01
-  const evenLng = homeLng + (r3 - 0.5) * 0.009
+  // ── Evening leisure ───────────────────────────────────────────────────────
+  const evenIdx  = Math.floor(r4 * EVENINGS.length)
+  const [eLat, eLng] = EVENINGS[evenIdx]
+  const evenLat  = eLat + (r2 - 0.5) * 0.002
+  const evenLng  = eLng + (r3 - 0.5) * 0.002
 
   switch (stage) {
     case 'WAKE_UP':
@@ -36,7 +94,7 @@ export function getCityStageCoords(npc: NPCWithState, stage: DayStage): [number,
       return [homeLat, homeLng]
 
     case 'MORNING':
-      // Leaving home — 30% toward work
+      // En route — 30% toward work
       return [
         homeLat * 0.7 + workLat * 0.3,
         homeLng * 0.7 + workLng * 0.3,
@@ -47,13 +105,17 @@ export function getCityStageCoords(npc: NPCWithState, stage: DayStage): [number,
       return [workLat, workLng]
 
     case 'LUNCH':
-      // Poor NPCs stay home, others go to restaurant
+      // Frugal NPCs eat near home/work; others go to a restaurant
       return npc.budget_ron < 1500
-        ? [homeLat, homeLng]
+        ? [workLat + (restLat - workLat) * 0.3, workLng + (restLng - workLng) * 0.3]
         : [restLat, restLng]
 
     case 'COMMUTE':
-      return [(workLat + homeLat) / 2, (workLng + homeLng) / 2]
+      // Midpoint of return journey
+      return [
+        (workLat + homeLat) / 2,
+        (workLng + homeLng) / 2,
+      ]
 
     case 'EVENING':
       return npc.budget_ron < 1500
