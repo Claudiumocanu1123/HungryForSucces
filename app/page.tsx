@@ -6,13 +6,14 @@ import { NPC, NPCWithState, DayStage, STAGE_TIMES, STAGES } from '@/types'
 import DetailPanel from '@/components/DetailPanel'
 import NPCModal from '@/components/NPCModal'
 import LandingPage from '@/components/LandingPage'
-import SimTimeline from '@/components/SimTimeline'
-import { NPCRoster } from '@/components/NPCRoster'
-import { WorldFeed, FeedEvent } from '@/components/WorldFeed'
+import { FeedEvent } from '@/components/WorldFeed'
 import CityView from '@/components/CityView'
 import { T } from '@/lib/theme'
 import { useDayTime } from '@/lib/useDayTime'
 import SkyBackground from '@/components/SkyBackground'
+import TopNav from '@/components/ui/TopNav'
+import NPCPanel from '@/components/ui/NPCPanel'
+import InfoPanel from '@/components/ui/InfoPanel'
 
 const GlobeView = dynamic(() => import('@/components/GlobeView'), { ssr: false })
 
@@ -108,7 +109,7 @@ export default function HomePage() {
   useEffect(() => {
     if (!introDone) return
     fetchAll()
-    pollRef.current = setInterval(fetchAll, 2000)
+    pollRef.current = setInterval(fetchAll, 3500)
     return () => { if (pollRef.current) clearInterval(pollRef.current) }
   }, [fetchAll, introDone])
 
@@ -154,117 +155,26 @@ export default function HomePage() {
       {/* Space starfield canvas — behind everything */}
       <SkyBackground timeOfDay={timeOfDay} theme={theme} spaceMode={true} />
 
-      {/* ── Header ── */}
-      <header style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '0 20px', height: 48, flexShrink: 0, position: 'relative', zIndex: 20,
-        background: 'rgba(2,4,14,0.80)',
-        borderBottom: `1px solid rgba(255,255,255,0.06)`,
-        backdropFilter: 'blur(20px)',
-        boxShadow: T.shadow,
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span style={{ fontSize: 17, fontWeight: 800, color: T.accent, letterSpacing: '-0.02em' }}>
-            LifeSim
-          </span>
-          {inCityMode && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: T.textFaint }}>
-              <span style={{ color: T.textSoft }}>Glob</span>
-              <span>›</span>
-              <span style={{ color: T.textSoft }}>Iași</span>
-              <span>›</span>
-              <span style={{ color: T.accent, fontWeight: 600 }}>{viewMode.cityName}</span>
-            </div>
-          )}
-          {!inCityMode && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{
-                width: 6, height: 6, borderRadius: '50%', background: T.good,
-                display: 'inline-block', boxShadow: `0 0 6px ${T.good}`,
-                animation: 'headerPulse 2s ease-in-out infinite',
-              }} />
-              <span style={{ fontSize: 11, color: T.textSoft }}>Simulare activă · Iași</span>
-            </div>
-          )}
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          {/* Start / Stop simulation */}
-          {simState.paused ? (
-            <button
-              onClick={async () => {
-                await fetch('/api/simulation', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'resume' }) })
-                await fetchAll()
-              }}
-              style={{
-                background: 'rgba(16,185,129,0.15)', border: '1px solid rgba(16,185,129,0.45)',
-                color: '#10b981', borderRadius: 9, padding: '5px 14px',
-                cursor: 'pointer', fontSize: 11, fontWeight: 700, letterSpacing: '0.04em',
-                display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'Inter,sans-serif',
-              }}
-            >
-              ▶ START SIMULARE
-            </button>
-          ) : (
-            <button
-              onClick={async () => {
-                await fetch('/api/simulation', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'pause' }) })
-                await fetchAll()
-              }}
-              style={{
-                background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.40)',
-                color: '#ef4444', borderRadius: 9, padding: '5px 14px',
-                cursor: 'pointer', fontSize: 11, fontWeight: 700, letterSpacing: '0.04em',
-                display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'Inter,sans-serif',
-              }}
-            >
-              ■ STOP SIMULARE
-            </button>
-          )}
-          {/* Clear story cache */}
-          <button
-            onClick={async () => {
-              await fetch('/api/simulation', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'clearStories' }) })
-            }}
-            title="Șterge poveștile din cache (regenerează)"
-            style={{
-              background: 'rgba(245,158,11,0.10)', border: '1px solid rgba(245,158,11,0.30)',
-              color: '#f59e0b', borderRadius: 8, padding: '5px 8px', cursor: 'pointer', fontSize: 13, lineHeight: 1,
-            }}
-          >
-            🗑️
-          </button>
-          {/* Settings */}
-          <button
-            onClick={() => { try { localStorage.removeItem(INTRO_KEY) } catch {} setIntroDone(false) }}
-            title="Înapoi la landing"
-            style={{
-              background: T.panel, border: `1px solid ${T.border}`, color: T.textFaint,
-              borderRadius: 8, padding: '5px 8px', cursor: 'pointer', fontSize: 13, lineHeight: 1,
-            }}
-          >
-            ⚙️
-          </button>
-          <button
-            onClick={() => handleOpenModal()}
-            style={{
-              background: T.accentSoft, border: `1px solid ${T.borderAccent}`,
-              color: T.accent, borderRadius: 9, padding: '5px 12px',
-              cursor: 'pointer', fontSize: 12, fontWeight: 700,
-              letterSpacing: '0.02em', fontFamily: 'Inter,sans-serif',
-            }}
-          >
-            + NPC
-          </button>
-        </div>
-      </header>
-
-      {/* ── SimTimeline ── */}
-      <SimTimeline
+      {/* ── Unified top nav ── */}
+      <TopNav
         day={simState.day}
         stage={simState.stage}
         stageIndex={simState.stageIndex}
         startedAt={simState.startedAt}
+        npcs={npcs}
+        simPaused={simState.paused}
+        viewMode={viewMode}
+        onToggleSim={async () => {
+          const action = simState.paused ? 'resume' : 'pause'
+          await fetch('/api/simulation', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action }) })
+          await fetchAll()
+        }}
+        onClearStories={async () => {
+          await fetch('/api/simulation', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'clearStories' }) })
+        }}
+        onOpenSettings={() => { try { localStorage.removeItem(INTRO_KEY) } catch {} setIntroDone(false) }}
+        onAddNpc={() => handleOpenModal()}
+        onBackToGlobe={inCityMode ? handleBackToGlobe : undefined}
       />
 
       {/* ── Main content ── */}
@@ -293,13 +203,13 @@ export default function HomePage() {
           />
         ) : (
           <>
-            {/* Left: NPC Roster */}
-            <NPCRoster
+            {/* Left: NPC Panel */}
+            <NPCPanel
               npcs={npcs}
-              selectedNpcId={globeSelectedNpc?.id ?? null}
+              selectedId={globeSelectedNpc?.id ?? null}
               activeInteractions={activeInteractions}
               interactionPairs={interactionPairs}
-              onSelectNpc={handleSelectNpc}
+              onSelect={handleSelectNpc}
             />
 
             {/* Center: Globe */}
@@ -325,7 +235,7 @@ export default function HomePage() {
               </div>
             </div>
 
-            {/* Right: WorldFeed or DetailPanel */}
+            {/* Right: InfoPanel or DetailPanel */}
             {globeSelectedNpc ? (
               <DetailPanel
                 npc={globeSelectedNpc}
@@ -335,13 +245,15 @@ export default function HomePage() {
                 allNpcs={npcs}
               />
             ) : (
-              <WorldFeed
+              <InfoPanel
+                npcs={npcs}
                 events={activityFeed}
+                activeInteractions={activeInteractions}
                 day={simState.day}
                 stage={simState.stage}
                 stageIndex={simState.stageIndex}
                 startedAt={simState.startedAt}
-                npcs={npcs}
+                timeOfDay={timeOfDay}
                 onSelectNpc={handleSelectNpcById}
               />
             )}
@@ -358,9 +270,6 @@ export default function HomePage() {
         />
       )}
 
-      <style>{`
-        @keyframes headerPulse { 0%,100%{opacity:1;} 50%{opacity:0.4;} }
-      `}</style>
     </div>
   )
 }

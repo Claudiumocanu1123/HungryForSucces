@@ -68,11 +68,11 @@ export default React.memo(function GlobeView({
   const ambIntensityRef      = useRef(ambientIntensity)
   const nightLightsOpacityRef = useRef(nightLightsOpacity)
 
-  // Keep refs in sync with props
-  useEffect(() => { timeOfDayRef.current         = timeOfDay },         [timeOfDay])
-  useEffect(() => { sunIntensityRef.current       = sunIntensity },      [sunIntensity])
-  useEffect(() => { ambIntensityRef.current       = ambientIntensity },  [ambientIntensity])
-  useEffect(() => { nightLightsOpacityRef.current = nightLightsOpacity },[nightLightsOpacity])
+  // Keep refs in sync with props — direct assignment, no effect overhead
+  timeOfDayRef.current         = timeOfDay
+  sunIntensityRef.current       = sunIntensity
+  ambIntensityRef.current       = ambientIntensity
+  nightLightsOpacityRef.current = nightLightsOpacity
 
   // Track container size for proper Globe sizing
   useEffect(() => {

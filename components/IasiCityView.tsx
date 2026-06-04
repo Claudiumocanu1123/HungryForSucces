@@ -9,6 +9,8 @@ import { getCityStageCoords } from '@/lib/cityCoords'
 import { fetchRoute, reverseRoute, posOnRoute } from '@/lib/routeService'
 import { FeedEvent } from './WorldFeed'
 import DetailPanel from './DetailPanel'
+import NPCPanel from './ui/NPCPanel'
+import InfoPanel from './ui/InfoPanel'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const IASI_CENTER: [number, number] = [47.1585, 27.6014]
@@ -187,6 +189,245 @@ function activityLabel(si:number,prog:number):{icon:string;text:string}{
   if(s==='NIGHT') return{icon:'🌙',text:'Noapte'}
   if(s==='EVENING') return{icon:'🌆',text:'Seară'}
   return{icon:'📍',text:s}
+}
+
+// ── City Background — replaces Leaflet map ───────────────────────────────────
+// Geographic bounds the panoramic image covers — calibrated to match
+// the real Iași districts defined in cityCoords.ts (all NPC positions fall inside)
+// Lat: 47.130–47.185, Lng: 27.553–47.650 with some padding on each side
+const IMG_BOUNDS = { minLat:47.125, maxLat:47.190, minLng:27.550, maxLng:27.655 }
+const BG_IMG = '/Gemini_Generated_Image_uz2m09uz2m09uz2m.png'
+const BSIZE = 44  // NPC bubble diameter px
+
+function latLngToPixel(lat:number,lng:number,dims:{w:number;h:number}):[number,number]{
+  const x=(lng-IMG_BOUNDS.minLng)/(IMG_BOUNDS.maxLng-IMG_BOUNDS.minLng)*dims.w
+  const y=(IMG_BOUNDS.maxLat-lat)/(IMG_BOUNDS.maxLat-IMG_BOUNDS.minLat)*dims.h
+  return[x,y]
+}
+
+function getImgFilter(h:number):string{
+  if(h>=22||h<5)  return'brightness(0.50) saturate(0.72)'
+  if(h<7)         return'brightness(0.70) saturate(1.15) sepia(0.10)'
+  if(h<9)         return'brightness(0.82) saturate(1.08)'
+  if(h<17)        return'brightness(0.94) saturate(1.04)'
+  if(h<20)        return'brightness(0.70) saturate(1.22) sepia(0.06)'
+  return           'brightness(0.58) saturate(0.82)'
+}
+
+function getTimeOverlay(h:number):string{
+  if(h>=22||h<5)  return'rgba(5,10,40,0.30)'
+  if(h<7)         return'rgba(150,55,0,0.09)'
+  if(h<17)        return'rgba(0,0,0,0)'
+  if(h<20)        return'rgba(170,45,0,0.08)'
+  return           'rgba(8,18,55,0.20)'
+}
+
+interface CityBgProps {
+  npcs:NPCWithState[];stageIndex:number;startedAt:number
+  activeInteractions:Set<string>;spreadPos:Map<string,[number,number]>
+  routes:Map<string,NPCRoutes>;selectedId:string|null
+  onSelect:(npc:NPCWithState)=>void
+  timeOfDay:number;progress:number;dims:{w:number;h:number}
+  ua:ReturnType<typeof uiAccent>
+}
+
+function CityBackground({
+  npcs,stageIndex,startedAt,activeInteractions,spreadPos,routes,
+  selectedId,onSelect,timeOfDay,progress,dims,ua
+}:CityBgProps){
+  const bubbleEls=useRef<Map<string,HTMLDivElement>>(new Map())
+  const lastPosRef=useRef<Map<string,[number,number]>>(new Map())
+  const rafRef=useRef<number|null>(null)
+
+  // Mutable refs — rAF loop reads these without causing re-renders
+  const siRef=useRef(stageIndex)
+  const startedAtRef=useRef(startedAt)
+  const routesRef=useRef(routes)
+  const spreadPosRef=useRef(spreadPos)
+  const dimsRef=useRef(dims)
+  siRef.current=stageIndex
+  startedAtRef.current=startedAt
+  routesRef.current=routes
+  spreadPosRef.current=spreadPos
+  dimsRef.current=dims
+
+  const imgFilter=useMemo(()=>getImgFilter(timeOfDay),[timeOfDay])
+  const overlay  =useMemo(()=>getTimeOverlay(timeOfDay),[timeOfDay])
+
+  // 60fps loop — updates CSS transforms directly, zero React state
+  useEffect(()=>{
+    const animate=()=>{
+      rafRef.current=requestAnimationFrame(animate)
+      const elapsed=Date.now()-startedAtRef.current
+      const si=siRef.current
+      const d=dimsRef.current
+      npcs.forEach(npc=>{
+        const el=bubbleEls.current.get(npc.id)
+        if(!el||!d.w)return
+        const target=computeNPCPos(npc,si,elapsed,routesRef.current,spreadPosRef.current)
+        const prev=lastPosRef.current.get(npc.id)
+        const pos:[number,number]=prev
+          ?[prev[0]+(target[0]-prev[0])*0.14,prev[1]+(target[1]-prev[1])*0.14]
+          :target
+        lastPosRef.current.set(npc.id,pos)
+        const[x,y]=latLngToPixel(pos[0],pos[1],d)
+        el.style.transform=`translate(${x-BSIZE/2}px,${y-BSIZE/2}px)`
+      })
+    }
+    rafRef.current=requestAnimationFrame(animate)
+    return()=>{if(rafRef.current)cancelAnimationFrame(rafRef.current)}
+  },[npcs])
+
+  // SVG route paths
+  const routePaths=useMemo(()=>{
+    if(!dims.w||!dims.h)return[]
+    return npcs.flatMap(npc=>{
+      const r=routes.get(npc.id)
+      if(!r)return[]
+      const ac=accent(npc.id)
+      const isSel=selectedId===npc.id
+      const segments=[r.toWork,r.toLunch,r.fromLunch,r.toHome].filter(s=>s&&s.length>1)
+      return segments.map((seg,i)=>{
+        const d=seg.map((pt,j)=>{
+          const[x,y]=latLngToPixel(pt[0],pt[1],dims)
+          return`${j===0?'M':'L'}${x.toFixed(1)} ${y.toFixed(1)}`
+        }).join(' ')
+        return{key:`${npc.id}-${i}`,d,color:ac,selected:isSel}
+      })
+    })
+  },[routes,dims,npcs,selectedId])
+
+  return(
+    <div style={{position:'absolute',inset:0,overflow:'hidden',userSelect:'none'}}>
+      {/* Panoramic city image */}
+      <img src={BG_IMG} draggable={false} alt=""
+        style={{
+          position:'absolute',inset:0,width:'100%',height:'100%',
+          objectFit:'cover',objectPosition:'center',
+          filter:imgFilter,transition:'filter 4s ease',
+          pointerEvents:'none',
+        }}
+      />
+
+      {/* Time-of-day colour tint */}
+      <div style={{
+        position:'absolute',inset:0,
+        background:overlay,transition:'background 4s ease',
+        pointerEvents:'none',zIndex:1,
+      }}/>
+
+      {/* Vignette — frames the view, adds depth */}
+      <div style={{
+        position:'absolute',inset:0,
+        background:'radial-gradient(ellipse 88% 82% at 50% 52%, transparent 30%, rgba(2,4,20,0.88) 100%)',
+        pointerEvents:'none',zIndex:2,
+      }}/>
+
+      {/* Route SVG overlay */}
+      {routePaths.length>0&&(
+        <svg style={{position:'absolute',inset:0,width:'100%',height:'100%',overflow:'visible',pointerEvents:'none',zIndex:3}}>
+          {routePaths.map(rp=>(
+            <path key={rp.key} d={rp.d} fill="none"
+              stroke={rp.color}
+              strokeWidth={rp.selected?2.5:1}
+              strokeOpacity={rp.selected?0.65:0.16}
+              strokeDasharray={rp.selected?undefined:'5 9'}
+              strokeLinecap="round" strokeLinejoin="round"
+            />
+          ))}
+        </svg>
+      )}
+
+      {/* NPC bubbles — positioned by rAF loop */}
+      {npcs.map((npc,idx)=>{
+        const ac=accent(npc.id)
+        const isSel=selectedId===npc.id
+        const isActive=activeInteractions.has(npc.id)
+        const firstName=npc.name.split(' ')[0]
+        const mood=npc.currentState?.mood??70
+        const energy=npc.currentState?.energy??70
+        const isSleeping=energy<15||mood<15
+
+        // Synchronous initial position so no flash at (0,0)
+        const initTarget=computeNPCPos(npc,stageIndex,Date.now()-startedAt,routes,spreadPos)
+        const[ix,iy]=dims.w?latLngToPixel(initTarget[0],initTarget[1],dims):[0,0]
+
+        return(
+          <div key={npc.id}
+            ref={el=>{if(el)bubbleEls.current.set(npc.id,el);else bubbleEls.current.delete(npc.id)}}
+            onClick={()=>onSelect(npc)}
+            style={{
+              position:'absolute',top:0,left:0,
+              transform:`translate(${ix-BSIZE/2}px,${iy-BSIZE/2}px)`,
+              cursor:'pointer',zIndex:isSel?100:isActive?50:10+idx,
+              filter:isSleeping?'saturate(0.2) brightness(0.55)':undefined,
+            }}
+          >
+            {/* Ambient glow */}
+            <div style={{
+              position:'absolute',
+              width:BSIZE+28,height:BSIZE+28,
+              top:-(28/2),left:-(28/2),
+              borderRadius:'50%',
+              background:`radial-gradient(circle,${isActive?'#10b981':ac}50 0%,transparent 68%)`,
+              animation:isActive?'iasiGlow 1.4s ease-in-out infinite':'iasiGlow 3s ease-in-out infinite',
+              animationDelay:`${idx*0.35}s`,
+            }}/>
+
+            {/* Avatar ring */}
+            <div style={{
+              width:BSIZE,height:BSIZE,borderRadius:'50%',
+              overflow:'hidden',position:'relative',
+              border:`2.5px solid ${isSel?'#ffffff':isActive?'#10b981':ac}`,
+              boxShadow:[
+                '0 4px 18px rgba(0,0,0,0.75)',
+                '0 0 0 1.5px rgba(0,0,0,0.45)',
+                isSel?'0 0 0 4px rgba(255,255,255,0.22), 0 0 22px rgba(255,255,255,0.28)':`0 0 16px ${ac}88`,
+                isActive?'0 0 0 4px rgba(16,185,129,0.28)':'',
+              ].filter(Boolean).join(','),
+              animation:'iasiFloat 3s ease-in-out infinite',
+              animationDelay:`${idx*0.28}s`,
+              background:'#0d1230',
+            }}>
+              <img src={`${DICE}${encodeURIComponent(firstName)}`}
+                width={BSIZE} height={BSIZE}
+                style={{display:'block',borderRadius:'50%'}}
+                loading="lazy" draggable={false}
+              />
+              {isSel&&<div style={{position:'absolute',inset:-5,borderRadius:'50%',border:'2px solid #fff',animation:'iasiRingW 1.2s ease-out infinite'}}/>}
+              {isActive&&<div style={{position:'absolute',inset:-6,borderRadius:'50%',border:'1.5px solid #10b981',animation:'iasiRing 1.5s ease-out infinite'}}/>}
+            </div>
+
+            {/* Needle */}
+            <div style={{width:2,height:11,borderRadius:'0 0 2px 2px',background:`linear-gradient(${ac}cc,transparent)`,margin:'-1px auto 0'}}/>
+
+            {/* Name chip */}
+            <div style={{
+              background:'rgba(4,6,24,0.88)',
+              border:`1px solid ${isSel?'rgba(255,255,255,0.35)':ac+'44'}`,
+              borderRadius:7,padding:'2px 7px',
+              display:'flex',alignItems:'center',gap:4,
+              whiteSpace:'nowrap',backdropFilter:'blur(12px)',
+              marginTop:1,
+            }}>
+              <span style={{fontSize:9,fontWeight:700,color:'#fff'}}>{firstName}</span>
+              {isActive&&<span style={{fontSize:8,color:'#10b981',fontWeight:700}}>●</span>}
+            </div>
+          </div>
+        )
+      })}
+
+      {/* Stage progress bar */}
+      <div style={{position:'absolute',bottom:0,left:0,right:0,height:3,background:'rgba(255,255,255,0.04)',zIndex:20}}>
+        <div style={{
+          height:'100%',width:`${progress*100}%`,
+          background:`linear-gradient(90deg,${ua.fg},${ua.fg}cc)`,
+          boxShadow:`0 0 8px ${ua.fg}`,
+          transition:'width 1s linear',
+        }}/>
+      </div>
+    </div>
+  )
 }
 
 // Weather simulation
@@ -1019,160 +1260,32 @@ export default function IasiCityView({
       animation:'iasiEnter 0.8s ease-out',
       background:'#030612',fontFamily:'Inter,system-ui,sans-serif',
     }}>
-      {/* ── Top Header ── */}
-      <div style={{
-        height:50,flexShrink:0,display:'flex',alignItems:'center',
-        padding:'0 16px',gap:10,
-        background:'rgba(3,5,20,0.96)',
-        borderBottom:'1px solid rgba(255,255,255,0.07)',
-        backdropFilter:'blur(20px)',zIndex:30,position:'relative',
-      }}>
-        {/* Logo */}
-        <div style={{display:'flex',alignItems:'center',gap:5,flexShrink:0}}>
-          <span style={{fontSize:14,fontWeight:800,color:'#fff',letterSpacing:'-0.01em'}}>
-            <span style={{color:ua.fg}}>Life</span>Sim
-          </span>
-        </div>
-        <div style={{width:1,height:18,background:'rgba(255,255,255,0.10)'}}/>
-        {/* Location */}
-        <div style={{display:'flex',alignItems:'center',gap:5,
-          background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.10)',
-          borderRadius:8,padding:'3px 10px',cursor:'pointer',flexShrink:0}}>
-          <span style={{fontSize:10}}>📍</span>
-          <span style={{fontSize:10,fontWeight:600,color:'rgba(255,255,255,0.75)'}}>Iași, România</span>
-          <span style={{fontSize:9,color:'rgba(255,255,255,0.35)'}}>▾</span>
-        </div>
-        {/* People count */}
-        <div style={{display:'flex',alignItems:'center',gap:5,
-          background:ua.bg,border:`1px solid ${ua.border}`,
-          borderRadius:8,padding:'3px 10px',flexShrink:0}}>
-          <span style={{fontSize:10}}>👥</span>
-          <span style={{fontSize:10,fontWeight:600,color:ua.fg}}>{npcs.length} persoane în oraș</span>
-        </div>
-
-        {/* Center: time + day + slider */}
-        <div style={{flex:1,display:'flex',alignItems:'center',gap:8,justifyContent:'center'}}>
-          <div style={{display:'flex',alignItems:'center',gap:5,
-            background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.10)',
-            borderRadius:8,padding:'3px 10px',flexShrink:0}}>
-            <span style={{fontSize:13}}>{isDaytime?'☀️':'🌙'}</span>
-            <div>
-              <div style={{fontSize:13,fontWeight:800,color:'#fff',lineHeight:1}}>{timeStr}</div>
-              <div style={{fontSize:7,color:'rgba(255,255,255,0.35)'}}>Miercuri, {new Date().toLocaleDateString('ro-RO',{day:'numeric',month:'long'})}</div>
-            </div>
-          </div>
-          <div style={{display:'flex',alignItems:'center',gap:5,
-            background:ua.bg,border:`1px solid ${ua.border}`,
-            borderRadius:8,padding:'3px 10px',flexShrink:0}}>
-            <span style={{fontSize:10,fontWeight:800,color:ua.fg}}>ZIUA {day}</span>
-          </div>
-          {/* Mini timeline */}
-          <div style={{flex:1,maxWidth:200,position:'relative',height:8}}>
-            <div style={{position:'absolute',inset:'2px 0',borderRadius:4,background:'rgba(255,255,255,0.08)'}}/>
-            <div style={{position:'absolute',top:2,left:0,height:4,borderRadius:4,
-              width:`${(timeOfDay/24)*100}%`,
-              background:'linear-gradient(90deg,#ff8c00,#ffcc00,#4fc3f7)',
-              transition:'width 1s linear'}}/>
-            <div style={{
-              position:'absolute',top:0,left:`calc(${(timeOfDay/24)*100}% - 4px)`,
-              width:8,height:8,borderRadius:'50%',
-              background:ua.fg,boxShadow:`0 0 6px ${ua.fg}`,
-              transition:'left 1s linear',
-            }}/>
-          </div>
-        </div>
-
-        {/* Right: controls */}
-        <div style={{display:'flex',alignItems:'center',gap:6}}>
-          {['🔍','🔔'].map(ic=>(
-            <button key={ic} style={{
-              width:30,height:30,borderRadius:8,background:'rgba(255,255,255,0.05)',
-              border:'1px solid rgba(255,255,255,0.10)',color:'rgba(255,255,255,0.5)',
-              cursor:'pointer',fontSize:13,display:'flex',alignItems:'center',justifyContent:'center',
-            }}>{ic}</button>
-          ))}
-          <button onClick={onBack} style={{
-            background:'rgba(255,255,255,0.06)',border:'1px solid rgba(255,255,255,0.12)',
-            color:'rgba(255,255,255,0.55)',borderRadius:8,padding:'4px 11px',
-            cursor:'pointer',fontSize:10,fontWeight:600,fontFamily:'Inter,sans-serif',
-          }}>← Glob</button>
-          <div style={{
-            display:'flex',alignItems:'center',gap:7,
-            background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.10)',
-            borderRadius:8,padding:'3px 10px',
-          }}>
-            <div style={{width:22,height:22,borderRadius:'50%',background:ua.bg,
-              border:`1px solid ${ua.border}`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:11}}>
-              👤
-            </div>
-            <div>
-              <div style={{fontSize:9,fontWeight:700,color:'rgba(255,255,255,0.70)'}}>Admin</div>
-              <div style={{fontSize:7,color:'rgba(255,255,255,0.30)'}}>Administrator</div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* ── Main Row ── */}
+      {/* ── Main Row (no internal header — TopNav in page.tsx covers it) ── */}
       <div style={{flex:1,display:'flex',overflow:'hidden',minHeight:0}}>
-        <LeftPanel npcs={npcs} activeInteractions={activeInteractions} selectedId={selectedId} onSelect={handleSelectById} ua={ua}/>
+        <NPCPanel
+          npcs={npcs}
+          selectedId={selectedId}
+          activeInteractions={activeInteractions}
+          interactionPairs={interactionPairs}
+          onSelect={handleSelectNpc}
+        />
 
-        {/* Center map */}
+        {/* Center — panoramic city background */}
         <div ref={mapAreaRef} style={{flex:1,position:'relative',overflow:'hidden'}}>
-
-          {/* Leaflet map */}
-          <MapContainer
-            center={IASI_CENTER} zoom={15}
-            style={{position:'absolute',inset:0,width:'100%',height:'100%'}}
-            zoomControl={false} attributionControl={false}
-            scrollWheelZoom={true}
-          >
-            <TileLayer
-              url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-              maxZoom={19}
-            />
-            <MapController onBack={onBack}/>
-            <NPCMapLayer
-              npcs={npcs} stage={stage}
-              stageIndex={stageIndex}
-              startedAt={startedAt}
-              activeInteractions={activeInteractions}
-              interactionPairs={interactionPairs}
-              spreadPos={spreadPos}
-              routes={npcRoutes}
-              selectedId={selectedId}
-              onSelect={handleSelectNpc}
-            />
-          </MapContainer>
-
-          {/* Sky canvas overlay (top portion) */}
-          <SkyCanvas timeOfDay={timeOfDay} sky={sky} width={mapDims.w} height={Math.floor(mapDims.h*0.52)}/>
-
-          {/* Cloud layer */}
-          <div style={{position:'absolute',top:0,left:0,right:0,height:'45%',pointerEvents:'none',zIndex:4,overflow:'hidden'}}>
-            <CloudLayer sky={sky}/>
-          </div>
-
-          {/* IAȘI label */}
-          <div style={{
-            position:'absolute',top:'14%',left:'50%',transform:'translateX(-50%)',
-            zIndex:8,pointerEvents:'none',textAlign:'center',
-          }}>
-            <div style={{
-              fontSize:26,fontWeight:900,color:'rgba(255,255,255,0.88)',
-              letterSpacing:'0.15em',
-              textShadow:'0 2px 20px rgba(0,0,0,0.8),0 0 40px rgba(0,0,0,0.6)',
-            }}>IAȘI</div>
-            <div style={{fontSize:10,letterSpacing:'0.3em',color:'rgba(255,255,255,0.50)',
-              textShadow:'0 1px 8px rgba(0,0,0,0.8)'}}>ROMÂNIA</div>
-          </div>
-
-          {/* Stage progress bar */}
-          <div style={{position:'absolute',bottom:0,left:0,right:0,height:3,background:'rgba(255,255,255,0.04)',zIndex:20}}>
-            <div style={{height:'100%',width:`${progress*100}%`,
-              background:`linear-gradient(90deg,${ua.fg},${ua.fg}cc)`,
-              transition:'width 1s linear'}}/>
-          </div>
+          <CityBackground
+            npcs={npcs}
+            stageIndex={stageIndex}
+            startedAt={startedAt}
+            activeInteractions={activeInteractions}
+            spreadPos={spreadPos}
+            routes={npcRoutes}
+            selectedId={selectedId}
+            onSelect={handleSelectNpc}
+            timeOfDay={timeOfDay}
+            progress={progress}
+            dims={mapDims}
+            ua={ua}
+          />
         </div>
 
         {selectedId ? (
@@ -1184,8 +1297,17 @@ export default function IasiCityView({
             allNpcs={npcs}
           />
         ) : (
-          <RightPanel npcs={npcs} events={events} activeInteractions={activeInteractions}
-            day={day} stage={stage} timeOfDay={timeOfDay} ua={ua} onSelect={handleSelectById}/>
+          <InfoPanel
+            npcs={npcs}
+            events={events}
+            activeInteractions={activeInteractions}
+            day={day}
+            stage={stage}
+            stageIndex={stageIndex}
+            startedAt={startedAt}
+            timeOfDay={timeOfDay}
+            onSelectNpc={handleSelectById}
+          />
         )}
       </div>
 
